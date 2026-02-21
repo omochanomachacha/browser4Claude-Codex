@@ -1,0 +1,40 @@
+{
+  "default_profile": "personal",
+  "profiles": {
+    "personal": {
+      "aliases": ["personal", "private", "個人"],
+      "config": "~/.human-browser/config.personal.json",
+      "launchd_label": "com.teramotodaiki.human-browser.personal",
+      "launchd_plist": "~/Library/LaunchAgents/com.teramotodaiki.human-browser.personal.plist",
+      "match": {
+        "url_hosts": ["gmail.com", "google.com", "youtube.com", "x.com"],
+        "workspace_regex": ["/Users/.*/personal/"],
+        "keywords": ["personal", "private", "個人"]
+      }
+    },
+    "anymind": {
+      "aliases": ["anymind", "company1", "corp1", "会社1", "会社ブラウザ1"],
+      "config": "~/.human-browser/config.anymind.json",
+      "launchd_label": "com.teramotodaiki.human-browser.anymind",
+      "launchd_plist": "~/Library/LaunchAgents/com.teramotodaiki.human-browser.anymind.plist",
+      "match": {
+        "url_hosts": ["anymind.example.com"],
+        "url_host_regex": ["(^|\\.)anymindgroup\\.com$"],
+        "workspace_regex": ["/Users/.*/anymind/"],
+        "keywords": ["anymind", "company1", "corp1", "会社1", "会社ブラウザ1"]
+      }
+    },
+    "acua": {
+      "aliases": ["acua", "acua.ai", "company2", "corp2", "会社2", "会社ブラウザ2"],
+      "config": "~/.human-browser/config.acua.json",
+      "launchd_label": "com.teramotodaiki.human-browser.acua",
+      "launchd_plist": "~/Library/LaunchAgents/com.teramotodaiki.human-browser.acua.plist",
+      "match": {
+        "url_hosts": ["acua.ai"],
+        "url_host_regex": ["(^|\\.)acua\\.ai$"],
+        "workspace_regex": ["/Users/.*/acua/"],
+        "keywords": ["acua", "acua.ai", "company2", "corp2", "会社2", "会社ブラウザ2"]
+      }
+    }
+  }
+}
