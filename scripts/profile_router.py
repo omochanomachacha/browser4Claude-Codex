@@ -119,44 +119,19 @@ def _extract_first_json_object(raw: str) -> dict[str, Any] | None:
 
 def _default_profiles(hb_home: str, user_home: str) -> dict[str, dict[str, Any]]:
     base_label = "com.teramotodaiki.human-browser"
-    defaults_by_name = {
-        "personal": ["personal", "private", "個人", "個人ブラウザ"],
-        "anymind": ["anymind", "company1", "corp1", "company-1", "会社1", "会社ブラウザ1"],
-        "acua": ["acua", "acua.ai", "company2", "corp2", "company-2", "会社2", "会社ブラウザ2"],
-    }
-    profiles: dict[str, dict[str, Any]] = {}
-    for name in ("personal", "anymind", "acua"):
-        label = f"{base_label}.{name}"
-        aliases = defaults_by_name[name]
-        config_path = os.path.join(hb_home, f"config.{name}.json")
-        if name == "anymind":
-            # Backward compatibility: older installs used config.json for company1.
-            config_path = os.path.join(hb_home, "config.json")
-        profiles[name] = {
-            "config": config_path,
-            "launchd_label": label,
-            "launchd_plist": os.path.join(user_home, "Library", "LaunchAgents", f"{label}.plist"),
-            "aliases": aliases,
+    return {
+        "default": {
+            "config": os.path.join(hb_home, "config.json"),
+            "launchd_label": base_label,
+            "launchd_plist": os.path.join(user_home, "Library", "LaunchAgents", f"{base_label}.plist"),
+            "aliases": ["default"],
             "url_hosts": [],
             "url_host_regex": [],
             "workspace_regex": [],
-            "keywords": aliases,
+            "keywords": [],
             "priority": 0,
         }
-
-    # Keep compatibility with the original single-profile setup.
-    profiles["default"] = {
-        "config": os.path.join(hb_home, "config.json"),
-        "launchd_label": base_label,
-        "launchd_plist": os.path.join(user_home, "Library", "LaunchAgents", f"{base_label}.plist"),
-        "aliases": ["default"],
-        "url_hosts": [],
-        "url_host_regex": [],
-        "workspace_regex": [],
-        "keywords": [],
-        "priority": -100,
     }
-    return profiles
 
 
 def _merge_profile_entry(name: str, entry: Any, base: dict[str, Any]) -> dict[str, Any]:
@@ -241,21 +216,11 @@ def load_profiles(hb_home: str, profiles_path: str) -> tuple[dict[str, Profile],
 
     default_profile = custom_data.get("default_profile")
     if not isinstance(default_profile, str) or default_profile not in profile_map:
-        # Backward-compatible default:
-        # 1) legacy single-config profile when available
-        # 2) personal profile when available
-        # 3) any existing config
-        # 4) deterministic profile name fallback
-        if "default" in profile_map and Path(profile_map["default"].config).exists():
-            default_profile = "default"
-        elif "personal" in profile_map and Path(profile_map["personal"].config).exists():
-            default_profile = "personal"
+        existing = [name for name, profile in profile_map.items() if Path(profile.config).exists()]
+        if existing:
+            default_profile = "default" if "default" in existing else sorted(existing)[0]
         else:
-            existing = [name for name, profile in profile_map.items() if Path(profile.config).exists()]
-            if existing:
-                default_profile = sorted(existing)[0]
-            else:
-                default_profile = "personal" if "personal" in profile_map else sorted(profile_map.keys())[0]
+            default_profile = "default" if "default" in profile_map else sorted(profile_map.keys())[0]
 
     return profile_map, default_profile
 
@@ -433,7 +398,7 @@ def resolve_profile(
             fallback_candidates: list[str] = []
             if isinstance(current, str):
                 fallback_candidates.append(current)
-            fallback_candidates.extend([default_profile, "default", "personal"])
+            fallback_candidates.extend([default_profile, "default"])
             fallback_candidates.extend(sorted(profiles.keys()))
 
             replacement: Profile | None = None
