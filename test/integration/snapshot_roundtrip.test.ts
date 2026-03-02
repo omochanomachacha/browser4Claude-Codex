@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { readFile } from 'node:fs/promises';
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createServer } from 'node:net';
 import { JSDOM } from 'jsdom';
@@ -78,6 +79,11 @@ test('snapshot -> click -> fill roundtrip works via daemon/bridge protocol', asy
 
   const fixturePath = join(process.cwd(), 'test', 'fixtures', 'fixed.html');
   const html = await readFile(fixturePath, 'utf8');
+  const tempDir = await mkdtemp(join(tmpdir(), 'human-browser-upload-'));
+  const csvPath = join(tempDir, 'sample.csv');
+  const pdfPath = join(tempDir, 'sample.pdf');
+  await writeFile(csvPath, 'name,value\nalice,1\n', 'utf8');
+  await writeFile(pdfPath, '%PDF-1.4\n', 'utf8');
   const dom = new JSDOM(html, {
     url: 'https://example.test/',
     pretendToBeVisual: true,
@@ -195,6 +201,21 @@ test('snapshot -> click -> fill roundtrip works via daemon/bridge protocol', asy
       return;
     }
 
+    if (message.command === 'upload') {
+      const selector = String(message.payload?.selector ?? '');
+      const files = Array.isArray(message.payload?.files)
+        ? message.payload.files.map((entry) => String(entry))
+        : [];
+      const input = dom.window.document.querySelector(selector);
+      if (!(input instanceof dom.window.HTMLInputElement)) {
+        reply(false, { code: 'NOT_FILE_INPUT', message: 'input not found' });
+        return;
+      }
+      input.setAttribute('data-uploaded-files', files.join('|'));
+      reply(true, { ok: true, files_count: files.length });
+      return;
+    }
+
     if (message.command === 'reset' || message.command === 'reconnect') {
       reply(true, { ok: true });
       return;
@@ -253,6 +274,25 @@ test('snapshot -> click -> fill roundtrip works via daemon/bridge protocol', asy
       value: 'bob@example.com',
     });
 
+    await callDaemon(config, 'upload', {
+      ref: 'e2',
+      files: [csvPath],
+      snapshot_id: snapshotId,
+    });
+
+    const uploadRefWithoutSnapshot = await callDaemonRaw(config, 'upload', {
+      ref: 'e2',
+      files: [csvPath],
+    });
+    assert.equal(uploadRefWithoutSnapshot.ok, false);
+    assert.equal(uploadRefWithoutSnapshot.error?.code, 'BAD_REQUEST');
+    assert.match(uploadRefWithoutSnapshot.error?.message ?? '', /requires args\.snapshot_id/);
+
+    await callDaemon(config, 'upload', {
+      selector: '#email',
+      files: [csvPath, pdfPath],
+    });
+
     const clicked = dom.window.document.querySelector('#login')?.getAttribute('data-clicked');
     assert.equal(clicked, '1');
 
@@ -261,8 +301,12 @@ test('snapshot -> click -> fill roundtrip works via daemon/bridge protocol', asy
       throw new Error('email input missing');
     }
     assert.equal(email.value, 'bob@example.com');
+
+    const uploaded = email.getAttribute('data-uploaded-files');
+    assert.equal(uploaded, `${csvPath}|${pdfPath}`);
   } finally {
     ws.close();
     await daemon.close();
+    await rm(tempDir, { recursive: true, force: true });
   }
 });

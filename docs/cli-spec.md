@@ -32,6 +32,7 @@
   - default is full-context snapshot (content + interactive). `--interactive` narrows output to interactive candidates only.
 - `human-browser click <selector|@ref> [--snapshot <snapshot_id>]`
 - `human-browser fill <selector|@ref> <value> [--snapshot <snapshot_id>]`
+- `human-browser upload <selector|@ref> <file_path...> [--snapshot <snapshot_id>] [--tab <active|tab_id>]`
   - ref (`@eN`/`ref=eN`/`eN`) を使う場合は `--snapshot` 必須
 - `human-browser keypress <key> [--tab <active|tab_id>]`
 - `human-browser scroll <x> <y> [--tab <active|tab_id>]`

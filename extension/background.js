@@ -1020,6 +1020,69 @@ async function runCommand(command, payload) {
       return response;
     }
 
+    case 'upload': {
+      const tabId = await resolveTabId(payload.tab_id);
+      await ensureAttached(tabId);
+
+      const selector = String(payload.selector || '');
+      if (!selector) {
+        throw {
+          code: 'BAD_REQUEST',
+          message: 'upload requires selector',
+        };
+      }
+
+      if (!Array.isArray(payload.files) || payload.files.length === 0) {
+        throw {
+          code: 'BAD_REQUEST',
+          message: 'upload requires files',
+          details: {
+            selector,
+          },
+        };
+      }
+
+      const files = payload.files
+        .filter((entry) => typeof entry === 'string')
+        .map((entry) => String(entry).trim())
+        .filter((entry) => entry.length > 0);
+
+      if (files.length === 0) {
+        throw {
+          code: 'BAD_REQUEST',
+          message: 'upload requires at least one non-empty file path',
+          details: {
+            selector,
+          },
+        };
+      }
+
+      const nodeId = await resolveNodeIdBySelector(tabId, selector);
+
+      try {
+        await chrome.debugger.sendCommand({ tabId }, 'DOM.setFileInputFiles', {
+          nodeId,
+          files,
+        });
+      } catch (error) {
+        throw {
+          code: 'UPLOAD_FAILED',
+          message: error instanceof Error ? error.message : String(error),
+          details: {
+            tab_id: tabId,
+            selector,
+            files_count: files.length,
+          },
+        };
+      }
+
+      return {
+        ok: true,
+        selector,
+        files_count: files.length,
+      };
+    }
+
     case 'keypress': {
       const tabId = await resolveTabId(payload.tab_id);
       await ensureAttached(tabId);
@@ -1492,6 +1555,68 @@ async function evaluateScript(tabId, scriptBody, input) {
   }
 
   return response?.result?.value;
+}
+
+async function resolveNodeIdBySelector(tabId, selector) {
+  await chrome.debugger.sendCommand({ tabId }, 'DOM.enable');
+
+  let documentRoot;
+  try {
+    documentRoot = await chrome.debugger.sendCommand({ tabId }, 'DOM.getDocument', {
+      depth: 0,
+      pierce: true,
+    });
+  } catch (error) {
+    throw {
+      code: 'CDP_DOM_FAILED',
+      message: error instanceof Error ? error.message : String(error),
+      details: {
+        tab_id: tabId,
+      },
+    };
+  }
+
+  const rootNodeId = Number(documentRoot?.root?.nodeId);
+  if (!Number.isFinite(rootNodeId) || rootNodeId <= 0) {
+    throw {
+      code: 'CDP_DOM_FAILED',
+      message: 'Failed to resolve DOM root node',
+      details: {
+        tab_id: tabId,
+      },
+    };
+  }
+
+  let queryResult;
+  try {
+    queryResult = await chrome.debugger.sendCommand({ tabId }, 'DOM.querySelector', {
+      nodeId: rootNodeId,
+      selector,
+    });
+  } catch (error) {
+    throw {
+      code: 'CDP_DOM_FAILED',
+      message: error instanceof Error ? error.message : String(error),
+      details: {
+        tab_id: tabId,
+        selector,
+      },
+    };
+  }
+
+  const nodeId = Number(queryResult?.nodeId);
+  if (!Number.isFinite(nodeId) || nodeId <= 0) {
+    throw {
+      code: 'NO_MATCH',
+      message: 'Element not found for selector',
+      details: {
+        tab_id: tabId,
+        selector,
+      },
+    };
+  }
+
+  return nodeId;
 }
 
 async function resetSession() {

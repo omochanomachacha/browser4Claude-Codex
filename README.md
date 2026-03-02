@@ -136,6 +136,7 @@ human-browser snapshot
 human-browser snapshot --interactive --cursor --compact --depth 3 --selector '#app'
 human-browser click '#login'
 human-browser fill '#email' hello@example.com
+human-browser upload 'input[type="file"]' ./sample.csv
 human-browser open https://example.com
 human-browser hover '#menu'
 human-browser screenshot
@@ -153,6 +154,7 @@ human-browser console dump --clear
 # refs (@e1/ref=e1/e1) で操作する場合は --snapshot が必須
 human-browser click @e1 --snapshot <snapshot_id>
 human-browser fill @e2 hello@example.com --snapshot <snapshot_id>
+human-browser upload @e3 ./sample.csv ./sample.pdf --snapshot <snapshot_id>
 human-browser diagnose --limit 20
 # token を表示する場合のみ明示フラグを使う
 human-browser ws --show-token

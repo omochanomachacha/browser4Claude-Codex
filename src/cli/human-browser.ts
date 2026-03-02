@@ -415,6 +415,33 @@ export function toDaemonRequest(
         },
       };
     }
+    case 'upload': {
+      const parsed = parseUploadArgs(args);
+      const ref = parseRefArg(parsed.selectorOrRef);
+
+      if (ref) {
+        if (!parsed.snapshotId) {
+          throw new HBError('BAD_REQUEST', 'upload with ref requires --snapshot <snapshot_id>');
+        }
+        return {
+          command,
+          args: {
+            ref,
+            files: parsed.files,
+            snapshot_id: parsed.snapshotId,
+          },
+        };
+      }
+
+      return {
+        command,
+        args: {
+          selector: parsed.selectorOrRef,
+          files: parsed.files,
+          tab_id: parsed.tabId,
+        },
+      };
+    }
     case 'keypress': {
       const key = args[0];
       if (!key) {
@@ -840,6 +867,62 @@ function parseWaitArgs(args: string[]): Record<string, unknown> {
   return payload;
 }
 
+function parseUploadArgs(args: string[]): {
+  selectorOrRef: string;
+  files: string[];
+  snapshotId?: string;
+  tabId?: number | 'active';
+} {
+  const selectorOrRef = args[0];
+  if (!selectorOrRef) {
+    throw new HBError('BAD_REQUEST', 'upload requires <selector|@ref> <file_path...>');
+  }
+
+  const files: string[] = [];
+  let snapshotId: string | undefined;
+  let tabId: number | 'active' | undefined;
+
+  for (let i = 1; i < args.length; i += 1) {
+    const token = args[i];
+    if (token === '--snapshot') {
+      const value = args[i + 1];
+      if (value === undefined || value.startsWith('--')) {
+        throw new HBError('BAD_REQUEST', 'Flag requires a value: --snapshot');
+      }
+      snapshotId = value;
+      i += 1;
+      continue;
+    }
+
+    if (token === '--tab') {
+      const value = args[i + 1];
+      if (value === undefined || value.startsWith('--')) {
+        throw new HBError('BAD_REQUEST', 'Flag requires a value: --tab');
+      }
+      tabId = parseTab(value);
+      i += 1;
+      continue;
+    }
+
+    if (token.startsWith('--')) {
+      throw new HBError('BAD_REQUEST', `Unknown flag: ${token}`);
+    }
+
+    files.push(token);
+  }
+
+  if (files.length === 0) {
+    throw new HBError('BAD_REQUEST', 'upload requires at least one <file_path>');
+  }
+
+  return {
+    selectorOrRef,
+    files,
+    snapshotId,
+    tabId,
+  };
+}
+
 function parseCookiesCommand(args: string[]): { command: string; args: Record<string, unknown> } {
   const sub = args[0];
 
@@ -1145,6 +1228,7 @@ function printHelp(): void {
       '  snapshot [--tab <active|tab_id>] [--interactive] [--cursor] [--compact] [--depth <N>] [--selector <css>]',
       '  click <selector|@ref> [--snapshot <snapshot_id>]',
       '  fill <selector|@ref> <value> [--snapshot <snapshot_id>]',
+      '  upload <selector|@ref> <file_path...> [--snapshot <snapshot_id>] [--tab <active|tab_id>]',
       '  keypress <key> [--tab <active|tab_id>]',
       '  scroll <x> <y> [--tab <active|tab_id>]',
       '  navigate <url> [--tab <active|tab_id>]',

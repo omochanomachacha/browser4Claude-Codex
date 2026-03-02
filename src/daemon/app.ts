@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
-import { mkdir, writeFile } from 'node:fs/promises';
+import { mkdir, stat, writeFile } from 'node:fs/promises';
 import { dirname, extname, join, resolve } from 'node:path';
 import { homedir } from 'node:os';
 import { WebSocketServer, type WebSocket } from 'ws';
@@ -568,6 +568,67 @@ async function executeCommand(
       };
     }
 
+    case 'upload': {
+      const files = await resolveUploadFiles(args);
+      const target = resolveActionTarget(args, 'upload');
+
+      if (target.kind === 'ref') {
+        const snapshotId = getRequiredSnapshotId(args, 'upload');
+        const snapshot = resolveSnapshotForAction(state, {
+          ...args,
+          snapshot_id: snapshotId,
+        });
+        const refData = snapshot.refs[target.ref];
+        if (!refData) {
+          throw new HBError('NO_SUCH_REF', `Ref not found: ${target.ref}`, {
+            ref: target.ref,
+            snapshot_id: snapshot.snapshot_id,
+          }, {
+            next_command: 'human-browser snapshot',
+          });
+        }
+
+        const result = await sendBridgeCommand(
+          state,
+          'upload',
+          {
+            tab_id: snapshot.tab_id,
+            selector: refData.selector,
+            files,
+          },
+          options,
+        );
+
+        return {
+          snapshot_id: snapshot.snapshot_id,
+          tab_id: snapshot.tab_id,
+          ref: target.ref,
+          selector: refData.selector,
+          files,
+          result,
+        };
+      }
+
+      const tabId = resolveTabForAction(state, args);
+      const result = await sendBridgeCommand(
+        state,
+        'upload',
+        {
+          tab_id: tabId,
+          selector: target.selector,
+          files,
+        },
+        options,
+      );
+
+      return {
+        tab_id: tabId,
+        selector: target.selector,
+        files,
+        result,
+      };
+    }
+
     case 'keypress': {
       const key = getStringField(args, 'key');
       const tabId = resolveTabForAction(state, args);
@@ -1054,7 +1115,7 @@ function resolveTabForAction(state: RuntimeState, args: Record<string, unknown>)
 
 function resolveActionTarget(
   args: Record<string, unknown>,
-  command: 'click' | 'fill' | 'hover',
+  command: 'click' | 'fill' | 'hover' | 'upload',
 ): { kind: 'ref'; ref: string } | { kind: 'selector'; selector: string } {
   const refRaw = typeof args.ref === 'string' ? args.ref : undefined;
   const selectorRaw = typeof args.selector === 'string' ? args.selector : undefined;
@@ -1082,7 +1143,7 @@ function resolveActionTarget(
   throw new HBError('BAD_REQUEST', `${command} requires args.ref or args.selector`);
 }
 
-function getRequiredSnapshotId(args: Record<string, unknown>, command: 'click' | 'fill' | 'hover' | 'text' | 'html'): string {
+function getRequiredSnapshotId(args: Record<string, unknown>, command: 'click' | 'fill' | 'hover' | 'upload' | 'text' | 'html'): string {
   const snapshotId = args.snapshot_id;
   if (typeof snapshotId !== 'string' || snapshotId.length === 0) {
     throw new HBError('BAD_REQUEST', `${command} with ref requires args.snapshot_id`, undefined, {
@@ -1090,6 +1151,49 @@ function getRequiredSnapshotId(args: Record<string, unknown>, command: 'click' |
     });
   }
   return snapshotId;
+}
+
+async function resolveUploadFiles(args: Record<string, unknown>): Promise<string[]> {
+  const rawFiles = args.files;
+  if (!Array.isArray(rawFiles) || rawFiles.length === 0) {
+    throw new HBError('BAD_REQUEST', 'upload requires args.files as a non-empty array of file paths');
+  }
+
+  const resolved: string[] = [];
+
+  for (const rawFile of rawFiles) {
+    if (typeof rawFile !== 'string' || rawFile.trim().length === 0) {
+      throw new HBError('BAD_REQUEST', 'upload file paths must be non-empty strings', {
+        files: rawFiles,
+      });
+    }
+    const absolutePath = resolve(rawFile);
+    let stats;
+    try {
+      stats = await stat(absolutePath);
+    } catch (error) {
+      throw new HBError(
+        'BAD_REQUEST',
+        `upload file does not exist: ${rawFile}`,
+        {
+          file: rawFile,
+          absolute_path: absolutePath,
+          cause: error instanceof Error ? error.message : String(error),
+        },
+      );
+    }
+
+    if (!stats.isFile()) {
+      throw new HBError('BAD_REQUEST', `upload path is not a file: ${rawFile}`, {
+        file: rawFile,
+        absolute_path: absolutePath,
+      });
+    }
+
+    resolved.push(absolutePath);
+  }
+
+  return resolved;
 }
 
 function parseRefArg(raw: string): string | null {

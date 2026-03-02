@@ -68,3 +68,22 @@ test('wait-for alias maps to wait', () => {
     timeout_ms: 1500,
   });
 });
+
+test('upload with selector maps files and optional tab', () => {
+  const request = toDaemonRequest('upload', ['#file', './a.csv', './b.pdf', '--tab', 'active']);
+  assert.equal(request.command, 'upload');
+  assert.deepEqual(request.args, {
+    selector: '#file',
+    files: ['./a.csv', './b.pdf'],
+    tab_id: 'active',
+  });
+});
+
+test('upload with ref requires snapshot id', () => {
+  assert.throws(
+    () => {
+      toDaemonRequest('upload', ['@e1', './a.csv']);
+    },
+    (error: unknown) => error instanceof HBError && error.structured.code === 'BAD_REQUEST',
+  );
+});

@@ -81,6 +81,7 @@ Failure:
 - `snapshot`: `{ target: "active" | number, interactive?: boolean, cursor?: boolean, compact?: boolean, depth?: number, selector?: string }`
 - `click`: `{ tab_id: number | "active", selector: string }`
 - `fill`: `{ tab_id: number | "active", selector: string, value: string }`
+- `upload`: `{ tab_id: number | "active", selector: string, files: string[] }`
 - `keypress`: `{ tab_id: number | "active", key: string }`
 - `scroll`: `{ tab_id: number | "active", x: number, y: number }`
 - `navigate`: `{ tab_id: number | "active", url: string }`
