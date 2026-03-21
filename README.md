@@ -1,6 +1,10 @@
 # human-browser
 
-Codex / Claude Code から、ユーザーのログイン済み Chrome をローカル daemon + 拡張経由で操作する最小実装です。
+Codex / Claude Code から、ユーザーの実Chromeを操作するための local daemon です。  
+backend は 2 系統あります。
+
+- `extension` backend: 既存のログイン済み Chrome をそのまま操作する既定モード
+- `cdp` backend: 実Chrome に Chrome DevTools Protocol で接続する追加モード
 
 ## 構成
 
@@ -56,6 +60,14 @@ launchctl kickstart -k "gui/$(id -u)/com.teramotodaiki.human-browser.acua"
 
 ラッパー（`~/.local/bin/human-browser`）は `daemon` 以外のコマンド実行前に `http://127.0.0.1:<port>/health` を確認し、落ちていれば `launchctl kickstart -k` で自動復帰を試みます。  
 自動起動を無効化したい場合は `HUMAN_BROWSER_AUTOSTART=0` を設定してください。
+
+更新後に daemon が旧コードのまま動いている場合は、profile ごとに `launchctl kickstart -k` で再起動してください。
+
+```bash
+launchctl kickstart -k "gui/$(id -u)/com.teramotodaiki.human-browser"
+launchctl kickstart -k "gui/$(id -u)/com.teramotodaiki.human-browser.personal"
+launchctl kickstart -k "gui/$(id -u)/com.teramotodaiki.human-browser.company2"
+```
 
 ## 複数ブラウザ（personal / anymind / acua）と自動選択
 
@@ -118,6 +130,59 @@ HUMAN_BROWSER_CONTEXT_HINT="acuaで確認" human-browser --expect-selector "#app
 
 token を更新した場合は、`human-browser rotate-token --show-token` 実行後に popup へ再設定してください。
 
+## 実Chrome CDP backend（Phase 2）
+
+CDP backend は headless 用ではなく、**実Chrome に接続するための backend** です。  
+2つの使い方があります。
+
+### 1. 既存の CDP endpoint に接続
+
+既に remote debugging を有効化した Chrome がある場合:
+
+```bash
+human-browser --config ~/.human-browser/config.cdp.json init \
+  --backend cdp \
+  --cdp-url http://127.0.0.1:9222
+```
+
+`--cdp-url` には `http://127.0.0.1:9222` か `ws://...` のどちらも使えます。
+
+### 2. managed real Chrome を起動
+
+```bash
+human-browser --config ~/.human-browser/config.cdp.json init \
+  --backend cdp \
+  --chrome-executable "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome" \
+  --user-data-dir "$HOME/.human-browser/managed-chrome" \
+  --profile-directory "Default" \
+  --remote-debugging-port 9222
+```
+
+補足:
+
+- これは **実Chrome** を起動して CDP 接続します
+- ログイン状態を再利用したい場合は `--user-data-dir` / `--profile-directory` で対象 profile を指定します
+- 既に同じ profile を使って Chrome が起動中だと競合する場合があります
+- `network` / `console` 系も Phase 3 で CDP backend 対応済みです
+
+### 3. actual logged-in profile の snapshot を seed して起動
+
+Chrome 136+ の制約で、default user data dir へそのまま remote debugging を刺すのは不安定です。  
+そのため CDP backend では、actual profile を managed user-data-dir に seed して起動する導線を用意しています。
+
+```bash
+human-browser --config ~/.human-browser/config.personal.cdp.json init \
+  --backend cdp \
+  --chrome-executable "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome" \
+  --user-data-dir "$HOME/.human-browser/personal-cdp" \
+  --profile-directory "Profile 1" \
+  --remote-debugging-port 29223 \
+  --seed-user-data-dir "$HOME/Library/Application Support/Google/Chrome" \
+  --seed-profile-directory "Profile 1"
+```
+
+これは live profile そのものではなく **snapshot seed** ですが、same-machine のログイン状態を引き継いだ managed real Chrome を作れます。
+
 ## 動作確認チェックリスト
 
 ```bash
@@ -135,13 +200,18 @@ human-browser --profile personal diagnose --limit 20
 ```bash
 human-browser status
 human-browser tabs
+human-browser state
 human-browser snapshot
 human-browser snapshot --interactive --cursor --compact --depth 3 --selector '#app'
 human-browser click '#login'
+human-browser click 1
+human-browser input 2 hello@example.com
 human-browser fill '#email' hello@example.com
 human-browser upload 'input[type="file"]' ./sample.csv
 human-browser open https://example.com
 human-browser hover '#menu'
+human-browser keys Enter
+human-browser scroll down 500
 human-browser screenshot
 human-browser screenshot page.png --full
 human-browser pdf page.pdf
@@ -165,6 +235,28 @@ human-browser rotate-token --show-token
 ```
 
 `snapshot` はデフォルトで本文コンテキストも含む全体スナップショットを返します。`--interactive` を付けると操作候補のみに絞ります。
+
+## browser-use 風の互換レイヤー（Phase 1）
+
+- `state` は `snapshot --interactive --cursor --compact` の薄い alias
+- `click 1` / `input 2 "text"` / `hover 3` / `get text 4` / `upload 5 file.csv` のような index 指定をサポート
+- index 指定は **直前の snapshot/state** を基準に `eN` ref を解決する
+- 既存の `@e1 --snapshot <snapshot_id>` フローはそのまま残す
+- `keys` は `keypress` の alias、`scroll down 500` のような方向 shorthand も追加
+
+推奨フロー:
+
+```bash
+human-browser state
+human-browser click 1
+human-browser input 2 hello@example.com
+```
+
+## backend の使い分け
+
+- `extension`: 既存のログイン済み Chrome をそのまま触りたい時の主力
+- `cdp`: 実Chrome を managed に起動したい時、既存 CDP endpoint に attach したい時、または actual profile snapshot を seed したい時
+- `status` / `diagnose` には現在の backend が出ます
 
 ## 仕様
 

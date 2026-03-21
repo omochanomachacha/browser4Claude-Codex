@@ -14,6 +14,10 @@
 - `human-browser init [--host 127.0.0.1] [--port 18765] [--max-events 500] [--force] [--show-token]`
   - creates config with shared token
   - `--force` で再初期化しても既存 token は維持される（daemon との token 不整合防止）
+  - `--backend cdp` で実Chrome向け CDP backend を有効化
+  - `--cdp-url <http://127.0.0.1:9222|ws://...>` で既存 CDP endpoint に接続
+  - `--chrome-executable`, `--user-data-dir`, `--profile-directory`, `--remote-debugging-port`, `--chrome-arg` で managed real Chrome の起動設定を保存
+  - `--seed-user-data-dir`, `--seed-profile-directory` で actual Chrome profile snapshot を managed user-data-dir に seed
 - `human-browser ws [--show-token]`
   - prints websocket endpoint (`token` is hidden unless `--show-token` is specified)
 - `human-browser rotate-token [--show-token]`
@@ -23,28 +27,38 @@
   - starts local daemon
 - `human-browser status`
   - connection/session status
+  - `extension.backend` に `extension|cdp` が出る
 - `human-browser tabs`
   - list tabs from extension
 - `human-browser use <active|tab_id>`
   - select target tab
+- `human-browser state [--tab <active|tab_id>] [--interactive] [--cursor] [--compact] [--depth <N>] [--selector <css>]`
+  - browser-use-inspired alias for interactive snapshot
+  - defaults to `interactive=true`, `cursor=true`, `compact=true`
 - `human-browser snapshot [--tab <active|tab_id>] [--interactive] [--cursor] [--compact] [--depth <N>] [--selector <css>]`
   - returns deterministic tree with refs and `snapshot_id`
   - default is full-context snapshot (content + interactive). `--interactive` narrows output to interactive candidates only.
-- `human-browser click <selector|@ref> [--snapshot <snapshot_id>]`
-- `human-browser fill <selector|@ref> <value> [--snapshot <snapshot_id>]`
-- `human-browser upload <selector|@ref> <file_path...> [--snapshot <snapshot_id>] [--tab <active|tab_id>]`
-  - ref (`@eN`/`ref=eN`/`eN`) を使う場合は `--snapshot` 必須
+- `human-browser click <selector|@ref|index> [--snapshot <snapshot_id>]`
+- `human-browser input <selector|@ref|index> <value> [--snapshot <snapshot_id>]`
+  - alias for `fill`
+- `human-browser fill <selector|@ref|index> <value> [--snapshot <snapshot_id>]`
+- `human-browser upload <selector|@ref|index> <file_path...> [--snapshot <snapshot_id>] [--tab <active|tab_id>]`
+  - ref (`@eN`/`ref=eN`/`eN`) は明示 snapshot を要求
+  - index (`1`, `2`, `3`, ...) は最新 snapshot/state から暗黙解決
+- `human-browser keys <key> [--tab <active|tab_id>]`
+  - alias for `keypress`
 - `human-browser keypress <key> [--tab <active|tab_id>]`
 - `human-browser scroll <x> <y> [--tab <active|tab_id>]`
+- `human-browser scroll <up|down|left|right> [amount] [--tab <active|tab_id>]`
 - `human-browser navigate <url> [--tab <active|tab_id>]`
 - `human-browser open <url> [--tab <active|tab_id>]`
 - `human-browser close [--tab <active|tab_id>]`
-- `human-browser hover <selector|@ref> [--snapshot <snapshot_id>]`
+- `human-browser hover <selector|@ref|index> [--snapshot <snapshot_id>]`
 - `human-browser screenshot [path] [--full] [--tab <active|tab_id>]`
 - `human-browser pdf <path> [--tab <active|tab_id>]`
 - `human-browser eval <javascript> [--tab <active|tab_id>]`
-- `human-browser get text <selector|@ref> [--snapshot <snapshot_id>]`
-- `human-browser get html [selector|@ref] [--snapshot <snapshot_id>]`
+- `human-browser get text <selector|@ref|index> [--snapshot <snapshot_id>]`
+- `human-browser get html [selector|@ref|index] [--snapshot <snapshot_id>]`
 - `human-browser wait <selector|milliseconds> [--timeout <ms>] [--tab <active|tab_id>]`
 - `human-browser wait --text <text> [--timeout <ms>] [--tab <active|tab_id>]`
 - `human-browser wait --url <pattern> [--timeout <ms>] [--tab <active|tab_id>]`
@@ -57,6 +71,7 @@
 - `human-browser network start|stop [--tab <active|tab_id>]`
 - `human-browser network dump|requests [--filter <text>] [--clear] [--tab <active|tab_id>]`
 - `human-browser console [start|stop|dump] [--clear] [--tab <active|tab_id>]`
+- `network` / `console` は extension / cdp の両 backend で対応
 - `human-browser reconnect`
   - request bridge reconnect
 - `human-browser reset`

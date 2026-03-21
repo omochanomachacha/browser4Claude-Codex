@@ -22,6 +22,57 @@ test('screenshot supports optional path and --full', () => {
   });
 });
 
+test('state maps to interactive compact snapshot by default', () => {
+  const request = toDaemonRequest('state', []);
+  assert.equal(request.command, 'snapshot');
+  assert.deepEqual(request.args, {
+    target: undefined,
+    interactive: true,
+    cursor: true,
+    compact: true,
+  });
+});
+
+test('click supports numeric index via latest snapshot', () => {
+  const request = toDaemonRequest('click', ['1']);
+  assert.equal(request.command, 'click');
+  assert.deepEqual(request.args, {
+    index: 1,
+    snapshot_id: undefined,
+    tab_id: undefined,
+  });
+});
+
+test('input alias maps to fill with numeric index', () => {
+  const request = toDaemonRequest('input', ['2', 'hello@example.com']);
+  assert.equal(request.command, 'fill');
+  assert.deepEqual(request.args, {
+    index: 2,
+    value: 'hello@example.com',
+    snapshot_id: undefined,
+    tab_id: undefined,
+  });
+});
+
+test('keys alias maps to keypress', () => {
+  const request = toDaemonRequest('keys', ['Meta+L']);
+  assert.equal(request.command, 'keypress');
+  assert.deepEqual(request.args, {
+    key: 'Meta+L',
+    tab_id: undefined,
+  });
+});
+
+test('scroll supports directional shorthand', () => {
+  const request = toDaemonRequest('scroll', ['down', '250']);
+  assert.equal(request.command, 'scroll');
+  assert.deepEqual(request.args, {
+    x: 0,
+    y: 250,
+    tab_id: undefined,
+  });
+});
+
 test('get text with ref requires snapshot id', () => {
   assert.throws(
     () => {
@@ -86,4 +137,14 @@ test('upload with ref requires snapshot id', () => {
     },
     (error: unknown) => error instanceof HBError && error.structured.code === 'BAD_REQUEST',
   );
+});
+
+test('get text supports numeric index without explicit snapshot id', () => {
+  const request = toDaemonRequest('get', ['text', '3']);
+  assert.equal(request.command, 'text');
+  assert.deepEqual(request.args, {
+    index: 3,
+    snapshot_id: undefined,
+    tab_id: undefined,
+  });
 });

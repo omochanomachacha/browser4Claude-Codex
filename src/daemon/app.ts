@@ -7,6 +7,7 @@ import { WebSocketServer, type WebSocket } from 'ws';
 import { URL } from 'node:url';
 import { HBError, asStructuredError } from '../shared/errors.ts';
 import { buildSnapshot } from '../shared/snapshot.ts';
+import { ManagedChromeCdpBackend } from '../backend/cdp.ts';
 import type {
   DaemonApiResponse,
   DaemonConfig,
@@ -36,12 +37,16 @@ interface ConnectionWaiter {
 
 interface RuntimeState {
   config: DaemonConfig;
+  backendType: 'extension' | 'cdp';
   extensionSocket?: WebSocket;
   extensionConnectedAt?: string;
   lastPingAt?: string;
   lastDisconnectReason?: string;
   reconnectAttempts: number;
+  cdpBackend?: ManagedChromeCdpBackend;
   selectedTabId?: number;
+  selectedWindowId?: number;
+  guardedWindowId?: number;
   latestSnapshot?: SnapshotData;
   pendingCommands: Map<string, PendingCommand>;
   connectionWaiters: ConnectionWaiter[];
@@ -58,14 +63,17 @@ export interface StartedDaemon {
 }
 
 export async function startDaemon(config: DaemonConfig): Promise<StartedDaemon> {
+  const backendType = config.backend?.type ?? 'extension';
   const state: RuntimeState = {
     config,
+    backendType,
     reconnectAttempts: 0,
     pendingCommands: new Map(),
     connectionWaiters: [],
     events: [],
     disconnectHistory: [],
     reconnectHistory: [],
+    cdpBackend: backendType === 'cdp' ? new ManagedChromeCdpBackend(config.cdp) : undefined,
   };
 
   const httpServer = createServer((req, res) => {
@@ -79,6 +87,10 @@ export async function startDaemon(config: DaemonConfig): Promise<StartedDaemon> 
   });
 
   bridgeServer.on('connection', (ws) => {
+    if (state.backendType !== 'extension') {
+      ws.close(1008, 'Extension bridge disabled when backend=cdp');
+      return;
+    }
     onExtensionConnected(state, ws);
   });
 
@@ -121,6 +133,9 @@ export async function startDaemon(config: DaemonConfig): Promise<StartedDaemon> 
         code: 'DISCONNECTED',
         message: 'Daemon shutting down',
       });
+      if (state.cdpBackend) {
+        await state.cdpBackend.dispose();
+      }
       await closeServer(httpServer);
       bridgeServer.close();
     },
@@ -387,14 +402,20 @@ async function executeCommand(
     case 'status': {
       return {
         extension: {
-          connected: Boolean(state.extensionSocket && state.extensionSocket.readyState === state.extensionSocket.OPEN),
+          connected: state.backendType === 'extension'
+            ? Boolean(state.extensionSocket && state.extensionSocket.readyState === state.extensionSocket.OPEN)
+            : Boolean(state.cdpBackend?.getStatus().connected),
           connected_at: state.extensionConnectedAt,
           last_ping_at: state.lastPingAt,
           last_disconnect_reason: state.lastDisconnectReason,
           reconnect_attempts: state.reconnectAttempts,
+          backend: state.backendType,
+          backend_status: state.backendType === 'cdp' ? state.cdpBackend?.getStatus() : undefined,
         },
         session: {
           selected_tab_id: state.selectedTabId,
+          selected_window_id: state.selectedWindowId,
+          guarded_window_id: state.guardedWindowId,
           latest_snapshot_id: state.latestSnapshot?.snapshot_id,
         },
       };
@@ -404,6 +425,10 @@ async function executeCommand(
       return sendBridgeCommand(state, 'list_tabs', {}, options);
     }
 
+    case 'windows': {
+      return sendBridgeCommand(state, 'list_windows', {}, options);
+    }
+
     case 'use': {
       const target = args.target;
       if (target === undefined) {
@@ -411,11 +436,57 @@ async function executeCommand(
       }
       const result = await sendBridgeCommand(state, 'select_tab', { target }, options);
       const tabId = Number(result.tab_id);
+      const windowId = Number(result.window_id);
       if (Number.isFinite(tabId)) {
         state.selectedTabId = tabId;
       }
+      if (Number.isFinite(windowId)) {
+        state.selectedWindowId = windowId;
+      }
       return {
         selected_tab_id: state.selectedTabId,
+        selected_window_id: state.selectedWindowId,
+      };
+    }
+
+    case 'use_window': {
+      const target = args.target;
+      if (target === undefined) {
+        throw new HBError('BAD_REQUEST', 'use_window command requires args.target');
+      }
+      const result = await sendBridgeCommand(state, 'select_window', { target }, options);
+      const windowId = Number(result.window_id);
+      if (Number.isFinite(windowId)) {
+        state.selectedWindowId = windowId;
+      }
+      return {
+        selected_window_id: state.selectedWindowId,
+      };
+    }
+
+    case 'guard_window': {
+      const target = args.target;
+      if (target === undefined) {
+        throw new HBError('BAD_REQUEST', 'guard_window command requires args.target');
+      }
+      const result = await sendBridgeCommand(state, 'guard_window', { target }, options);
+      const windowId = Number(result.guarded_window_id);
+      if (Number.isFinite(windowId)) {
+        state.guardedWindowId = windowId;
+        state.selectedWindowId = windowId;
+      }
+      return {
+        guarded_window_id: state.guardedWindowId,
+      };
+    }
+
+    case 'unguard_window': {
+      const result = await sendBridgeCommand(state, 'clear_guarded_window', {}, options);
+      if (result.guarded_window_id === null) {
+        state.guardedWindowId = undefined;
+      }
+      return {
+        guarded_window_id: null,
       };
     }
 
@@ -454,6 +525,29 @@ async function executeCommand(
     }
 
     case 'click': {
+      const snapshotTarget = resolveSnapshotBackedTarget(state, args, 'click');
+
+      if (snapshotTarget) {
+        const result = await sendBridgeCommand(
+          state,
+          'click',
+          {
+            tab_id: snapshotTarget.tabId,
+            selector: snapshotTarget.selector,
+          },
+          options,
+        );
+
+        return {
+          snapshot_id: snapshotTarget.snapshotId,
+          tab_id: snapshotTarget.tabId,
+          ref: snapshotTarget.ref,
+          index: snapshotTarget.index,
+          selector: snapshotTarget.selector,
+          result,
+        };
+      }
+
       const target = resolveActionTarget(args, 'click');
 
       if (target.kind === 'ref') {
@@ -511,6 +605,30 @@ async function executeCommand(
 
     case 'fill': {
       const value = getStringField(args, 'value');
+      const snapshotTarget = resolveSnapshotBackedTarget(state, args, 'fill');
+
+      if (snapshotTarget) {
+        const result = await sendBridgeCommand(
+          state,
+          'fill',
+          {
+            tab_id: snapshotTarget.tabId,
+            selector: snapshotTarget.selector,
+            value,
+          },
+          options,
+        );
+
+        return {
+          snapshot_id: snapshotTarget.snapshotId,
+          tab_id: snapshotTarget.tabId,
+          ref: snapshotTarget.ref,
+          index: snapshotTarget.index,
+          selector: snapshotTarget.selector,
+          result,
+        };
+      }
+
       const target = resolveActionTarget(args, 'fill');
 
       if (target.kind === 'ref') {
@@ -570,6 +688,31 @@ async function executeCommand(
 
     case 'upload': {
       const files = await resolveUploadFiles(args);
+      const snapshotTarget = resolveSnapshotBackedTarget(state, args, 'upload');
+
+      if (snapshotTarget) {
+        const result = await sendBridgeCommand(
+          state,
+          'upload',
+          {
+            tab_id: snapshotTarget.tabId,
+            selector: snapshotTarget.selector,
+            files,
+          },
+          options,
+        );
+
+        return {
+          snapshot_id: snapshotTarget.snapshotId,
+          tab_id: snapshotTarget.tabId,
+          ref: snapshotTarget.ref,
+          index: snapshotTarget.index,
+          selector: snapshotTarget.selector,
+          files,
+          result,
+        };
+      }
+
       const target = resolveActionTarget(args, 'upload');
 
       if (target.kind === 'ref') {
@@ -678,6 +821,27 @@ async function executeCommand(
       };
     }
 
+    case 'create_tab': {
+      const url = getStringField(args, 'url');
+      const active = args.active === false ? false : true;
+      const windowId = resolveWindowForAction(state, args);
+      const result = await sendBridgeCommand(state, 'create_tab', { url, active, window_id: windowId }, options);
+      const tabId = Number(result.tab_id);
+      const createdWindowId = Number(result.window_id);
+      if (Number.isFinite(tabId)) {
+        state.selectedTabId = tabId;
+      }
+      if (Number.isFinite(createdWindowId)) {
+        state.selectedWindowId = createdWindowId;
+      }
+      return {
+        tab_id: tabId,
+        window_id: Number.isFinite(createdWindowId) ? createdWindowId : undefined,
+        url: result.url,
+        active: result.active,
+      };
+    }
+
     case 'close': {
       const tabId = resolveTabForAction(state, args);
       const result = await sendBridgeCommand(state, 'close', { tab_id: tabId }, options);
@@ -691,6 +855,29 @@ async function executeCommand(
     }
 
     case 'hover': {
+      const snapshotTarget = resolveSnapshotBackedTarget(state, args, 'hover');
+
+      if (snapshotTarget) {
+        const result = await sendBridgeCommand(
+          state,
+          'hover',
+          {
+            tab_id: snapshotTarget.tabId,
+            selector: snapshotTarget.selector,
+          },
+          options,
+        );
+
+        return {
+          snapshot_id: snapshotTarget.snapshotId,
+          tab_id: snapshotTarget.tabId,
+          ref: snapshotTarget.ref,
+          index: snapshotTarget.index,
+          selector: snapshotTarget.selector,
+          result,
+        };
+      }
+
       const target = resolveActionTarget(args, 'hover');
 
       if (target.kind === 'ref') {
@@ -757,6 +944,27 @@ async function executeCommand(
     }
 
     case 'text': {
+      const snapshotTarget = resolveSnapshotBackedTarget(state, args, 'text');
+      if (snapshotTarget) {
+        const result = await sendBridgeCommand(
+          state,
+          'text',
+          {
+            tab_id: snapshotTarget.tabId,
+            selector: snapshotTarget.selector,
+          },
+          options,
+        );
+        return {
+          tab_id: snapshotTarget.tabId,
+          snapshot_id: snapshotTarget.snapshotId,
+          ref: snapshotTarget.ref,
+          index: snapshotTarget.index,
+          selector: snapshotTarget.selector,
+          result,
+        };
+      }
+
       const target = resolveReadTarget(state, args, 'text');
       const result = await sendBridgeCommand(
         state,
@@ -775,6 +983,27 @@ async function executeCommand(
     }
 
     case 'html': {
+      const snapshotTarget = resolveSnapshotBackedTarget(state, args, 'html');
+      if (snapshotTarget) {
+        const result = await sendBridgeCommand(
+          state,
+          'html',
+          {
+            tab_id: snapshotTarget.tabId,
+            selector: snapshotTarget.selector,
+          },
+          options,
+        );
+        return {
+          tab_id: snapshotTarget.tabId,
+          snapshot_id: snapshotTarget.snapshotId,
+          ref: snapshotTarget.ref,
+          index: snapshotTarget.index,
+          selector: snapshotTarget.selector,
+          result,
+        };
+      }
+
       const target = resolveReadTarget(state, args, 'html', true);
       const result = await sendBridgeCommand(
         state,
@@ -1011,6 +1240,14 @@ async function executeCommand(
     }
 
     case 'reconnect': {
+      if (state.backendType === 'cdp') {
+        await state.cdpBackend?.reconnect();
+        return {
+          requested: true,
+          result: { ok: true, backend: 'cdp' },
+        };
+      }
+
       if (!state.extensionSocket || state.extensionSocket.readyState !== state.extensionSocket.OPEN) {
         throw new HBError(
           'DISCONNECTED',
@@ -1033,6 +1270,13 @@ async function executeCommand(
 
     case 'reset': {
       state.latestSnapshot = undefined;
+      if (state.backendType === 'cdp') {
+        await state.cdpBackend?.execute('reset', {}, options.timeoutMs);
+        return {
+          session_reset: true,
+          extension_reset_requested: false,
+        };
+      }
       const extensionOnline = Boolean(
         state.extensionSocket && state.extensionSocket.readyState === state.extensionSocket.OPEN,
       );
@@ -1113,6 +1357,33 @@ function resolveTabForAction(state: RuntimeState, args: Record<string, unknown>)
   return 'active';
 }
 
+function resolveWindowForAction(state: RuntimeState, args: Record<string, unknown>): number | 'current' | undefined {
+  const explicit = args.window_id;
+  if (typeof explicit === 'number' && Number.isFinite(explicit)) {
+    return explicit;
+  }
+
+  if (typeof explicit === 'string') {
+    if (explicit === 'current') {
+      return 'current';
+    }
+    const parsed = Number(explicit);
+    if (Number.isFinite(parsed)) {
+      return parsed;
+    }
+  }
+
+  if (typeof state.guardedWindowId === 'number') {
+    return state.guardedWindowId;
+  }
+
+  if (typeof state.selectedWindowId === 'number') {
+    return state.selectedWindowId;
+  }
+
+  return undefined;
+}
+
 function resolveActionTarget(
   args: Record<string, unknown>,
   command: 'click' | 'fill' | 'hover' | 'upload',
@@ -1141,6 +1412,63 @@ function resolveActionTarget(
   }
 
   throw new HBError('BAD_REQUEST', `${command} requires args.ref or args.selector`);
+}
+
+function resolveSnapshotBackedTarget(
+  state: RuntimeState,
+  args: Record<string, unknown>,
+  command: 'click' | 'fill' | 'hover' | 'upload' | 'text' | 'html',
+): { tabId: number; snapshotId: string; selector: string; ref?: string; index?: number } | null {
+  const refRaw = typeof args.ref === 'string' ? args.ref : undefined;
+  const indexRaw = args.index;
+
+  if (refRaw === undefined && indexRaw === undefined) {
+    return null;
+  }
+
+  let refKey: string;
+  let index: number | undefined;
+  let snapshotArgs = args;
+
+  if (refRaw !== undefined) {
+    const parsedRef = parseRefArg(refRaw);
+    if (!parsedRef) {
+      throw new HBError('BAD_REQUEST', `Invalid ref format for ${command}: ${refRaw}`);
+    }
+    snapshotArgs = {
+      ...args,
+      snapshot_id: getRequiredSnapshotId(args, command),
+    };
+    refKey = parsedRef;
+  } else {
+    const numericIndex = Number(indexRaw);
+    if (!Number.isInteger(numericIndex) || numericIndex <= 0) {
+      throw new HBError('BAD_REQUEST', `${command} index must be a positive integer`);
+    }
+    index = numericIndex;
+    refKey = `e${numericIndex}`;
+  }
+
+  const snapshot = resolveSnapshotForAction(state, snapshotArgs);
+
+  const refData = snapshot.refs[refKey];
+  if (!refData) {
+    throw new HBError('NO_SUCH_REF', `Ref not found: ${refKey}`, {
+      ref: refKey,
+      index,
+      snapshot_id: snapshot.snapshot_id,
+    }, {
+      next_command: 'human-browser snapshot',
+    });
+  }
+
+  return {
+    tabId: snapshot.tab_id,
+    snapshotId: snapshot.snapshot_id,
+    selector: refData.selector,
+    ref: index === undefined ? refKey : undefined,
+    index,
+  };
 }
 
 function getRequiredSnapshotId(args: Record<string, unknown>, command: 'click' | 'fill' | 'hover' | 'upload' | 'text' | 'html'): string {
@@ -1314,6 +1642,13 @@ async function sendBridgeCommand(
   payload: Record<string, unknown>,
   options: { timeoutMs: number; queueMode: QueueMode },
 ): Promise<Record<string, unknown>> {
+  if (state.backendType === 'cdp') {
+    if (!state.cdpBackend) {
+      throw new HBError('DISCONNECTED', 'CDP backend is not initialized');
+    }
+    return state.cdpBackend.execute(command, payload, options.timeoutMs);
+  }
+
   await ensureBridgeConnected(state, options.timeoutMs, options.queueMode);
 
   if (!state.extensionSocket || state.extensionSocket.readyState !== state.extensionSocket.OPEN) {
@@ -1432,10 +1767,14 @@ function buildDiagnostics(state: RuntimeState, limit: number): DiagnosticsReport
   return {
     now: new Date().toISOString(),
     extension: {
-      connected: Boolean(state.extensionSocket && state.extensionSocket.readyState === state.extensionSocket.OPEN),
+      connected: state.backendType === 'extension'
+        ? Boolean(state.extensionSocket && state.extensionSocket.readyState === state.extensionSocket.OPEN)
+        : Boolean(state.cdpBackend?.getStatus().connected),
       connected_at: state.extensionConnectedAt,
       last_ping_at: state.lastPingAt,
       last_disconnect_reason: state.lastDisconnectReason,
+      backend: state.backendType,
+      backend_status: state.backendType === 'cdp' ? state.cdpBackend?.getStatus() : undefined,
     },
     session: {
       selected_tab_id: state.selectedTabId,

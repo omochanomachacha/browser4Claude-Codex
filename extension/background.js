@@ -37,6 +37,8 @@ const state = {
   },
   target: {
     tabId: null,
+    windowId: null,
+    guardedWindowId: null,
     attached: false,
   },
   monitor: {
@@ -961,6 +963,7 @@ async function runCommand(command, payload) {
           .filter((tab) => typeof tab.id === 'number')
           .map((tab) => ({
             id: tab.id,
+            window_id: tab.windowId,
             active: Boolean(tab.active),
             title: tab.title || '',
             url: tab.url || '',
@@ -968,11 +971,52 @@ async function runCommand(command, payload) {
       };
     }
 
+    case 'list_windows': {
+      const windows = await chrome.windows.getAll({ populate: true });
+      return {
+        windows: windows
+          .filter((win) => typeof win.id === 'number')
+          .map((win) => ({
+            id: win.id,
+            focused: Boolean(win.focused),
+            type: win.type || '',
+            tab_count: Array.isArray(win.tabs) ? win.tabs.length : 0,
+          })),
+      };
+    }
+
     case 'select_tab': {
       const tabId = await resolveTabId(payload.target);
+      const tab = await chrome.tabs.get(tabId);
       state.target.tabId = tabId;
+      state.target.windowId = tab.windowId ?? null;
       return {
         tab_id: tabId,
+        window_id: tab.windowId ?? null,
+      };
+    }
+
+    case 'select_window': {
+      const windowId = await resolveWindowId(payload.target);
+      state.target.windowId = windowId;
+      return {
+        window_id: windowId,
+      };
+    }
+
+    case 'guard_window': {
+      const windowId = await resolveWindowId(payload.target);
+      state.target.guardedWindowId = windowId;
+      state.target.windowId = windowId;
+      return {
+        guarded_window_id: windowId,
+      };
+    }
+
+    case 'clear_guarded_window': {
+      state.target.guardedWindowId = null;
+      return {
+        guarded_window_id: null,
       };
     }
 
@@ -1119,6 +1163,29 @@ async function runCommand(command, payload) {
         ok: true,
         tab_id: tabId,
         url,
+      };
+    }
+
+    case 'create_tab': {
+      const url = String(payload.url || 'about:blank');
+      const active = payload.active === false ? false : true;
+      const tab = await chrome.tabs.create({
+        url,
+        active,
+        windowId: payload.window_id === undefined ? state.target.guardedWindowId ?? state.target.windowId ?? undefined : await resolveWindowId(payload.window_id),
+      });
+      if (typeof tab.id === 'number') {
+        state.target.tabId = tab.id;
+      }
+      if (typeof tab.windowId === 'number') {
+        state.target.windowId = tab.windowId;
+      }
+      return {
+        ok: true,
+        tab_id: tab.id,
+        window_id: tab.windowId ?? null,
+        url: tab.url || url,
+        active: Boolean(tab.active),
       };
     }
 
@@ -1455,7 +1522,12 @@ async function runCommand(command, payload) {
 
 async function resolveTabId(target) {
   if (target === undefined || target === null || target === 'active') {
-    const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
+    const query = state.target.guardedWindowId
+      ? { active: true, windowId: state.target.guardedWindowId }
+      : state.target.windowId
+        ? { active: true, windowId: state.target.windowId }
+        : { active: true, currentWindow: true };
+    const tabs = await chrome.tabs.query(query);
     const active = tabs.find((tab) => typeof tab.id === 'number');
     if (!active || typeof active.id !== 'number') {
       throw {
@@ -1480,6 +1552,51 @@ async function resolveTabId(target) {
   throw {
     code: 'BAD_REQUEST',
     message: 'Invalid tab target',
+    details: { target },
+  };
+}
+
+async function resolveWindowId(target) {
+  if (target === undefined || target === null || target === 'current') {
+    if (typeof state.target.guardedWindowId === 'number') {
+      return state.target.guardedWindowId;
+    }
+    if (typeof state.target.windowId === 'number') {
+      return state.target.windowId;
+    }
+    const windows = await chrome.windows.getAll({ populate: true });
+    const focused = windows.find((win) => win.focused && typeof win.id === 'number');
+    if (focused && typeof focused.id === 'number') {
+      return focused.id;
+    }
+    try {
+      const lastFocused = await chrome.windows.getLastFocused();
+      if (lastFocused && typeof lastFocused.id === 'number') {
+        return lastFocused.id;
+      }
+    } catch {
+      // Ignore fallback resolution errors.
+    }
+    throw {
+      code: 'NO_ACTIVE_WINDOW',
+      message: 'No active window found',
+    };
+  }
+
+  if (typeof target === 'number' && Number.isFinite(target)) {
+    return target;
+  }
+
+  if (typeof target === 'string') {
+    const parsed = Number(target);
+    if (Number.isFinite(parsed)) {
+      return parsed;
+    }
+  }
+
+  throw {
+    code: 'BAD_REQUEST',
+    message: 'Invalid window target',
     details: { target },
   };
 }

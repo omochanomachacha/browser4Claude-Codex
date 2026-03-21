@@ -46,6 +46,7 @@ export interface SnapshotRef {
 export interface SnapshotData {
   snapshot_id: string;
   tab_id: number;
+  window_id?: number;
   tree: string;
   refs: Record<string, SnapshotRef>;
   created_at: string;
@@ -75,9 +76,13 @@ export interface DiagnosticsReport {
     connected_at?: string;
     last_ping_at?: string;
     last_disconnect_reason?: string;
+    backend?: 'extension' | 'cdp';
+    backend_status?: Record<string, unknown>;
   };
   session: {
     selected_tab_id?: number;
+    selected_window_id?: number;
+    guarded_window_id?: number;
     latest_snapshot_id?: string;
   };
   events: DaemonEvent[];
@@ -95,6 +100,18 @@ export interface DaemonConfig {
   };
   diagnostics: {
     max_events: number;
+  };
+  backend?: {
+    type: 'extension' | 'cdp';
+  };
+  cdp?: {
+    browser_ws_url?: string;
+    browser_http_url?: string;
+    executable_path?: string;
+    user_data_dir?: string;
+    profile_directory?: string;
+    remote_debugging_port?: number;
+    launch_args?: string[];
   };
 }
 

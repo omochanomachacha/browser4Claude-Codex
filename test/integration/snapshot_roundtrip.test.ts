@@ -252,10 +252,19 @@ test('snapshot -> click -> fill roundtrip works via daemon/bridge protocol', asy
       snapshot_id: snapshotId,
     });
 
+    await callDaemon(config, 'click', {
+      index: 1,
+    });
+
     await callDaemon(config, 'fill', {
       ref: 'e2',
       value: 'alice@example.com',
       snapshot_id: snapshotId,
+    });
+
+    await callDaemon(config, 'fill', {
+      index: 2,
+      value: 'index@example.com',
     });
 
     const refWithoutSnapshot = await callDaemonRaw(config, 'click', {
@@ -278,6 +287,11 @@ test('snapshot -> click -> fill roundtrip works via daemon/bridge protocol', asy
       ref: 'e2',
       files: [csvPath],
       snapshot_id: snapshotId,
+    });
+
+    await callDaemon(config, 'upload', {
+      index: 2,
+      files: [pdfPath],
     });
 
     const uploadRefWithoutSnapshot = await callDaemonRaw(config, 'upload', {

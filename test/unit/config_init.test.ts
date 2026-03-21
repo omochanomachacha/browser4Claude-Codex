@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { initConfig, rotateConfigToken } from '../../src/shared/config.ts';
+import { initConfig, readConfig, rotateConfigToken } from '../../src/shared/config.ts';
 
 async function makeTempConfigPath(): Promise<{ dir: string; configPath: string }> {
   const dir = await mkdtemp(join(tmpdir(), 'human-browser-config-'));
@@ -99,4 +99,35 @@ test('rotateConfigToken rotates token and preserves daemon/diagnostics settings'
   const persistedRaw = await readFile(configPath, 'utf8');
   const persisted = JSON.parse(persistedRaw) as { auth: { token: string } };
   assert.equal(persisted.auth.token, rotated.config.auth.token);
+});
+
+test('initConfig persists cdp backend settings', async (t) => {
+  const { dir, configPath } = await makeTempConfigPath();
+  t.after(async () => {
+    await rm(dir, { recursive: true, force: true });
+  });
+
+  const created = await initConfig({
+    configPath,
+    host: '127.0.0.1',
+    port: 18765,
+    maxEvents: 500,
+    force: false,
+    backendType: 'cdp',
+    cdp: {
+      browser_http_url: 'http://127.0.0.1:9222',
+      profile_directory: 'Profile 3',
+      remote_debugging_port: 9222,
+      launch_args: ['--start-maximized'],
+    },
+  });
+
+  assert.equal(created.config.backend?.type, 'cdp');
+  assert.equal(created.config.cdp?.browser_http_url, 'http://127.0.0.1:9222');
+  assert.equal(created.config.cdp?.profile_directory, 'Profile 3');
+  assert.deepEqual(created.config.cdp?.launch_args, ['--start-maximized']);
+
+  const loaded = await readConfig(configPath);
+  assert.equal(loaded.backend?.type, 'cdp');
+  assert.equal(loaded.cdp?.remote_debugging_port, 9222);
 });

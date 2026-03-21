@@ -5,9 +5,11 @@
   "main": "index.js",
   "scripts": {
     "test": "node --test test/**/*.test.ts",
-    "lint": "node --check src/cli/human-browser.ts && node --check src/daemon/app.ts && node --check src/shared/config.ts && node --check src/shared/errors.ts && node --check src/shared/snapshot.ts && node --check src/shared/types.ts && node --check extension/background.js",
+    "lint": "node --check src/cli/human-browser.ts && node --check src/cli/chatgpt-runner.ts && node --check src/cli/chatgpt-runner-mcp.ts && node --check src/daemon/app.ts && node --check src/backend/cdp.ts && node --check src/shared/config.ts && node --check src/shared/errors.ts && node --check src/shared/snapshot.ts && node --check src/shared/types.ts && node --check src/chatgpt-runner/shared/config.ts && node --check src/chatgpt-runner/shared/errors.ts && node --check src/chatgpt-runner/shared/types.ts && node --check src/chatgpt-runner/core/store.ts && node --check src/chatgpt-runner/core/runner.ts && node --check src/chatgpt-runner/driver/human-browser.ts && node --check src/chatgpt-runner/chatgpt-web/adapter.ts && node --check extension/background.js",
     "daemon": "node src/cli/human-browser.ts daemon",
     "cli": "node src/cli/human-browser.ts",
+    "chatgpt-runner": "node src/cli/chatgpt-runner.ts",
+    "chatgpt-runner:mcp": "node src/cli/chatgpt-runner-mcp.ts",
     "dev": "node src/cli/human-browser.ts daemon"
   },
   "keywords": [],
@@ -20,10 +22,13 @@
     "README.md"
   ],
   "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.27.1",
     "jsdom": "^28.0.0",
     "ws": "^8.19.0"
   },
   "bin": {
-    "human-browser": "src/cli/human-browser.ts"
+    "human-browser": "src/cli/human-browser.ts",
+    "chatgpt-runner": "src/cli/chatgpt-runner.ts",
+    "chatgpt-runner-mcp": "src/cli/chatgpt-runner-mcp.ts"
   }
 }

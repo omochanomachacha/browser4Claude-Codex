@@ -43,7 +43,7 @@ export async function readConfig(configPath?: string): Promise<DaemonConfig> {
   }
 
   validateConfig(parsed, resolved);
-  return parsed;
+  return normalizeConfig(parsed as DaemonConfig);
 }
 
 function assertLoopbackHost(host: string, path: string): void {
@@ -66,6 +66,8 @@ function validateConfig(input: unknown, path: string): asserts input is DaemonCo
   const daemon = cfg.daemon as Record<string, unknown> | undefined;
   const auth = cfg.auth as Record<string, unknown> | undefined;
   const diagnostics = cfg.diagnostics as Record<string, unknown> | undefined;
+  const backend = cfg.backend as Record<string, unknown> | undefined;
+  const cdp = cfg.cdp as Record<string, unknown> | undefined;
 
   if (!daemon || typeof daemon.host !== 'string' || typeof daemon.port !== 'number') {
     throw new HBError('BAD_REQUEST', 'Config.daemon.host and config.daemon.port are required', {
@@ -85,6 +87,18 @@ function validateConfig(input: unknown, path: string): asserts input is DaemonCo
       config_path: path,
     });
   }
+
+  if (backend !== undefined) {
+    if (!backend || (backend.type !== 'extension' && backend.type !== 'cdp')) {
+      throw new HBError('BAD_REQUEST', 'Config.backend.type must be extension or cdp', {
+        config_path: path,
+      });
+    }
+  }
+
+  if (cdp !== undefined) {
+    validateCdpConfig(cdp, path);
+  }
 }
 
 export async function initConfig(options: {
@@ -93,6 +107,8 @@ export async function initConfig(options: {
   port: number;
   maxEvents: number;
   force: boolean;
+  backendType?: 'extension' | 'cdp';
+  cdp?: DaemonConfig['cdp'];
 }): Promise<{ path: string; config: DaemonConfig; alreadyExisted: boolean }> {
   const resolved = resolveConfigPath(options.configPath);
   if (options.host !== LOOPBACK_HOST) {
@@ -130,6 +146,12 @@ export async function initConfig(options: {
     diagnostics: {
       max_events: options.maxEvents,
     },
+    backend: {
+      type: options.backendType ?? 'extension',
+    },
+    cdp: options.backendType === 'cdp'
+      ? sanitizeCdpConfig(options.cdp)
+      : undefined,
   };
 
   await mkdir(dirname(resolved), { recursive: true });
@@ -140,7 +162,7 @@ export async function initConfig(options: {
 
   return {
     path: resolved,
-    config,
+    config: normalizeConfig(config),
     alreadyExisted: exists,
   };
 }
@@ -162,8 +184,72 @@ export async function rotateConfigToken(configPath?: string): Promise<{ path: st
 
   return {
     path: resolved,
-    config: rotated,
+    config: normalizeConfig(rotated),
   };
+}
+
+function normalizeConfig(input: DaemonConfig): DaemonConfig {
+  const backendType = input.backend?.type ?? 'extension';
+  return {
+    ...input,
+    backend: {
+      type: backendType,
+    },
+    cdp: backendType === 'cdp' ? sanitizeCdpConfig(input.cdp) : input.cdp,
+  };
+}
+
+function sanitizeCdpConfig(input?: DaemonConfig['cdp']): DaemonConfig['cdp'] {
+  if (!input) {
+    return {
+      remote_debugging_port: 9222,
+      profile_directory: 'Default',
+      launch_args: [],
+    };
+  }
+
+  return {
+    browser_ws_url: typeof input.browser_ws_url === 'string' && input.browser_ws_url.length > 0 ? input.browser_ws_url : undefined,
+    browser_http_url: typeof input.browser_http_url === 'string' && input.browser_http_url.length > 0 ? input.browser_http_url : undefined,
+    executable_path: typeof input.executable_path === 'string' && input.executable_path.length > 0 ? input.executable_path : undefined,
+    user_data_dir: typeof input.user_data_dir === 'string' && input.user_data_dir.length > 0 ? input.user_data_dir : undefined,
+    profile_directory: typeof input.profile_directory === 'string' && input.profile_directory.length > 0 ? input.profile_directory : 'Default',
+    remote_debugging_port: typeof input.remote_debugging_port === 'number' && Number.isFinite(input.remote_debugging_port)
+      ? input.remote_debugging_port
+      : 9222,
+    launch_args: Array.isArray(input.launch_args)
+      ? input.launch_args.filter((value): value is string => typeof value === 'string' && value.length > 0)
+      : [],
+  };
+}
+
+function validateCdpConfig(cdp: Record<string, unknown>, path: string): void {
+  const stringFields = ['browser_ws_url', 'browser_http_url', 'executable_path', 'user_data_dir', 'profile_directory'] as const;
+  for (const field of stringFields) {
+    const value = cdp[field];
+    if (value !== undefined && typeof value !== 'string') {
+      throw new HBError('BAD_REQUEST', `Config.cdp.${field} must be a string`, {
+        config_path: path,
+      });
+    }
+  }
+
+  if (cdp.remote_debugging_port !== undefined) {
+    const value = cdp.remote_debugging_port;
+    if (typeof value !== 'number' || !Number.isInteger(value) || value <= 0) {
+      throw new HBError('BAD_REQUEST', 'Config.cdp.remote_debugging_port must be a positive integer', {
+        config_path: path,
+      });
+    }
+  }
+
+  if (cdp.launch_args !== undefined) {
+    if (!Array.isArray(cdp.launch_args) || cdp.launch_args.some((value) => typeof value !== 'string')) {
+      throw new HBError('BAD_REQUEST', 'Config.cdp.launch_args must be an array of strings', {
+        config_path: path,
+      });
+    }
+  }
 }
 
 function extractReusableToken(raw: string): string | null {

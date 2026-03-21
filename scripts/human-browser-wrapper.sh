@@ -6,7 +6,7 @@ HB_CLI="${HB_HOME}/src/cli/human-browser.ts"
 HB_ROUTER="${HUMAN_BROWSER_PROFILE_ROUTER:-${HB_HOME}/scripts/profile_router.py}"
 HB_PROFILES="${HUMAN_BROWSER_PROFILES:-${HB_HOME}/profiles.json}"
 HB_PROFILE_STATE="${HUMAN_BROWSER_PROFILE_STATE:-${HB_HOME}/profile-state.json}"
-HB_REPO_URL="${HUMAN_BROWSER_REPO_URL:-https://github.com/<owner>/browser4Claude-Codex}"
+HB_REPO_URL="${HUMAN_BROWSER_REPO_URL:-https://github.com/omochanomachacha/browser4Claude-Codex}"
 HB_PYTHON="${HUMAN_BROWSER_PYTHON:-}"
 
 DEFAULT_CONFIG="${HB_HOME}/config.json"
@@ -279,9 +279,9 @@ if profiles_path.exists():
                                 token_candidates.append(value.lower())
 
 if not token_candidates:
-    token_candidates = []
+    token_candidates = ["anymind", "anymindgroup", "acua", "acua.ai", "omocha", "gmail"]
 
-blocked_tokens = {"default", "profile", "profiles", "browser", "browsers", "config", "launchd", "human-browser"}
+blocked_tokens = {"default", "personal", "private", "company1", "company2", "会社1", "会社2", "会社ブラウザ1", "会社ブラウザ2"}
 
 normalized_tokens: list[str] = []
 seen = set()
@@ -776,7 +776,7 @@ if ((${#candidates[@]} == 0)); then
   if [[ -n "${HB_SELECTED_PROFILE:-}" ]]; then
     candidates=("${HB_SELECTED_PROFILE}")
   else
-    candidates=("default")
+    candidates=("anymind" "acua" "personal")
   fi
 fi
 
@@ -789,6 +789,9 @@ last_status=1
 last_profile="${HB_SELECTED_PROFILE:-}"
 for candidate in "${candidates[@]}"; do
   if [[ -z "${candidate}" ]]; then
+    continue
+  fi
+  if [[ "${candidate}" == "default" ]]; then
     continue
   fi
 
